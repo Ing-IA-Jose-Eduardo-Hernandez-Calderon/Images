@@ -1,0 +1,209 @@
+import osmnx as ox
+import networkx as nx
+import matplotlib.pyplot as plt
+import warnings
+from typing import Dict
+
+warnings.filterwarnings('ignore', category=FutureWarning)
+
+ROUTES_TO_ANALYZE = [
+    {
+        'name': 'Ruta Universidad de Xalapa a Casa',
+        'start': {'node': 1590330315, 'label': 'Universidad de Xalapa'},
+        'end': {'node': 1356401687, 'label': 'Casa'}
+    },
+    {
+        'name': 'Ruta Gimnasio a Casa',
+        'start': {'node': 1600683070, 'label': 'Gym Zero Ruiz Cortines'},
+        'end': {'node': 1356401687, 'label': 'Casa'}
+    },
+    {
+        'name': 'Ruta IMSS a Escuela',
+        'start': {'node': 1232751291, 'label': 'IMSS Clínica 11'},
+        'end': {'node': 1590330315, 'label': 'Escuela'}
+    },
+    {
+        'name': 'Ruta Clínica a Tianguis',
+        'start': {'node': 1590330594, 'label': 'Clínica Vivitam'},
+        'end': {'node': 1957776365, 'label': 'Tianguis 1ero de Mayo'}
+    }
+]
+
+
+def heuristic(u, v, nodes):
+    """Función heurística para A* basada en distancia euclidiana"""
+    u_lat = nodes[u]['y']
+    u_lon = nodes[u]['x']
+    v_lat = nodes[v]['y']
+    v_lon = nodes[v]['x']
+    return ((u_lat - v_lat) ** 2 + (u_lon - v_lon) ** 2) ** 0.5
+
+
+def calculate_astar_path(G, start_node, end_node):
+    """Implementación personalizada de A* para encontrar la ruta más corta"""
+    try:
+        return nx.astar_path(
+            G,
+            start_node,
+            end_node,
+            heuristic=lambda u, v: heuristic(u, v, G.nodes),
+            weight='length'
+        )
+    except nx.NetworkXNoPath:
+        return None
+
+
+def get_route_stats(G, route, algorithm_name):
+    """Calcula y muestra estadísticas de la ruta"""
+    if route is None:
+        return None
+
+    length = sum(ox.utils_graph.get_route_edge_attributes(G, route, 'length'))
+
+    try:
+        travel_time = sum(ox.utils_graph.get_route_edge_attributes(G, route, 'travel_time'))
+    except:
+        travel_time = None
+
+    stats = {
+        'algorithm': algorithm_name,
+        'distance_km': length / 1000,
+        'num_nodes': len(route)
+    }
+
+    if travel_time:
+        stats['estimated_time_min'] = travel_time / 60
+
+    return stats
+
+
+def plot_algorithm_routes(G, routes_dict: Dict[str, Dict], algorithm: str):
+    """Genera visualización para un algoritmo específico"""
+    fig, ax = plt.subplots(figsize=(20, 20))
+
+    # Colores para cada ruta
+    route_colors = {
+        'Ruta Universidad de Xalapa a Casa': 'blue',
+        'Ruta Gimnasio a Casa': 'red',
+        'Ruta IMSS a Escuela': 'green',
+        'Ruta Clínica a Tianguis': 'orange'
+    }
+
+    # Graficar el mapa base
+    ox.plot_graph(
+        G, ax=ax,
+        node_color="lightgray",
+        edge_color="gray",
+        node_size=5,
+        edge_linewidth=0.5,
+        show=False,
+        close=False
+    )
+
+    # Graficar cada ruta
+    legend_elements = []
+    for route_name, algorithms in routes_dict.items():
+        route = algorithms[algorithm]
+        if route:
+            ox.plot_graph_route(
+                G, route,
+                route_linewidth=4,
+                route_color=route_colors[route_name],
+                ax=ax,
+                show=False,
+                close=False,
+                orig_dest_node_color="green",
+                route_alpha=0.6
+            )
+            # Añadir a la leyenda
+            legend_elements.append(plt.Line2D([0], [0], color=route_colors[route_name],
+                                              linewidth=4,
+                                              label=f"{route_name} usando {algorithm}"))
+
+    ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1, 1))
+    plt.title(f"Rutas en Xalapa usando algoritmo {algorithm}")
+    return fig, ax
+
+
+def main():
+    try:
+        print("Cargando mapa de Xalapa...")
+        place_name = "Xalapa, Veracruz"
+        G = ox.graph_from_place(place_name, network_type="drive")
+
+        print("Añadiendo información de velocidades...")
+        G = ox.routing.add_edge_speeds(G)
+        G = ox.routing.add_edge_travel_times(G)
+
+        all_routes = {}
+        stats = []
+
+        print("\nCalculando rutas...")
+        for route_info in ROUTES_TO_ANALYZE:
+            route_name = route_info['name']
+            start_node = route_info['start']['node']
+            end_node = route_info['end']['node']
+
+            print(f"\nAnalizando {route_name}:")
+            all_routes[route_name] = {}
+
+            # Calcular ruta con Dijkstra
+            try:
+                dijkstra_route = nx.dijkstra_path(G, start_node, end_node, weight="length")
+                all_routes[route_name]['Dijkstra'] = dijkstra_route
+                route_stats = get_route_stats(G, dijkstra_route, 'Dijkstra')
+                route_stats['route_name'] = route_name
+                stats.append(route_stats)
+                print(f"✓ Ruta Dijkstra calculada")
+            except nx.NetworkXNoPath:
+                print(f"✗ No se encontró ruta Dijkstra para {route_name}")
+                all_routes[route_name]['Dijkstra'] = None
+
+            # Calcular ruta con A*
+            try:
+                astar_route = calculate_astar_path(G, start_node, end_node)
+                all_routes[route_name]['A*'] = astar_route
+                if astar_route:
+                    route_stats = get_route_stats(G, astar_route, 'A*')
+                    route_stats['route_name'] = route_name
+                    stats.append(route_stats)
+                    print(f"✓ Ruta A* calculada")
+                else:
+                    print(f"✗ No se encontró ruta A* para {route_name}")
+            except Exception as e:
+                print(f"✗ Error calculando ruta A* para {route_name}: {str(e)}")
+                all_routes[route_name]['A*'] = None
+
+        # Mostrar estadísticas
+        print("\nEstadísticas de las rutas:")
+        for stat in stats:
+            print(f"\n{stat['route_name']} - {stat['algorithm']}:")
+            print(f"- Distancia: {stat['distance_km']:.2f} km")
+            print(f"- Nodos en la ruta: {stat['num_nodes']}")
+            if 'estimated_time_min' in stat:
+                print(f"- Tiempo estimado: {stat['estimated_time_min']:.1f} min")
+
+        # Crear visualizaciones separadas para cada algoritmo
+        print("\nGenerando visualizaciones...")
+
+        # Visualización para Dijkstra
+        fig_dijkstra, ax_dijkstra = plot_algorithm_routes(G, all_routes, 'Dijkstra')
+        plt.figure(fig_dijkstra.number)
+        plt.savefig('rutas_xalapa_dijkstra.png', dpi=300, bbox_inches='tight')
+        print("✓ Visualización Dijkstra guardada como 'rutas_xalapa_dijkstra.png'")
+
+        # Visualización para A*
+        fig_astar, ax_astar = plot_algorithm_routes(G, all_routes, 'A*')
+        plt.figure(fig_astar.number)
+        plt.savefig('rutas_xalapa_astar.png', dpi=300, bbox_inches='tight')
+        print("✓ Visualización A* guardada como 'rutas_xalapa_astar.png'")
+
+        plt.show()
+        print("\n¡Proceso completado!")
+
+    except Exception as e:
+        print(f"\nError durante la ejecución: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()
